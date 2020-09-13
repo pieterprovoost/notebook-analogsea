@@ -1,0 +1,82 @@
+---
+title: Offloading R jobs to cloud infrastructure using analogsea
+author: Pieter Provoost
+output: html_document
+--- 
+
+Install the `analogsea` package:
+
+```{r message = FALSE, warning = FALSE}
+if(!require(analogsea)){
+  devtools::install_github("sckott/analogsea")
+  library(analogsea)
+}
+
+readRenviron("~/.Renviron")
+```
+
+Helper function to get an IP address and wait for the server to accept connections:
+
+```{r message = FALSE, warning = FALSE}
+wait_for_droplet <- function(d) {
+  repeat {
+    d <- droplet(d$id)
+    if (length(d$networks$v4) > 0) {
+      message("Network up...")
+      break  
+    }
+    Sys.sleep(1)  
+  }
+  repeat {
+    con <- try(socketConnection(d$networks$v4[[1]]$ip_address, 22, blocking = TRUE, timeout = 1), silent = TRUE)
+    if (!inherits(con, "try-error")) {
+      message("Port 22 listening...")
+      close(con)
+      return(d)
+    }
+    Sys.sleep(1)  
+  }
+}
+```
+
+Spin up the server and install R:
+
+```{r, message = FALSE, warning = FALSE, results = "hide"}
+d <- droplet_create() %>%
+  wait_for_droplet() %>%
+  droplet_ssh("apt-get update") %>%
+  debian_install_r()
+```
+
+Remotely execute code and retrieve the results:
+
+```{r message = FALSE, warning = FALSE, results = "hide"}
+results <- d %>%
+  droplet_upload("boston.csv", "boston.csv") %>%
+  droplet_execute({
+    install.packages("rpart")
+    install.packages("tictoc")
+    library(rpart)
+    library(tictoc)
+    tic()
+    fit <- rpart(medv ~ ., data = read.csv("boston.csv"), method = "anova", model = TRUE)
+    timing <- toc()
+  })
+```
+
+Take down the server:
+
+```{r message = FALSE, warning = FALSE}
+droplet_delete(d)
+```
+
+Inspect the results:
+
+```{r message = FALSE, warning = FALSE}
+results$timing
+results$fit
+
+library(rpart.plot)
+prp(results$fit, box.palette = "auto")
+```
+
